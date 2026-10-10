@@ -1,0 +1,32 @@
+[project]
+name = "me-want-pickle"
+version = "0.1.0"
+description = "Books CourtReserve courts and open-play events the moment they open."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+dependencies = [
+    "flask>=3.0",
+    "requests>=2.32",
+    "keyring>=25",
+]
+
+[project.scripts]
+mwp = "me_want_pickle.cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "me_want_pickle" = "src" }
+packages = ["me_want_pickle", "me_want_pickle.courtreserve", "me_want_pickle.web"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+me_want_pickle = ["web/templates/*", "web/static/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]

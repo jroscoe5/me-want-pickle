@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>me want pickle</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🥒</text></svg>">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <div class="term" id="app">
+    <div class="status">
+      <span class="name">🥒</span>
+      <span class="kv">v{{ version }}</span>
+      <span class="kv" id="st-facility"></span>
+      <span class="kv" id="st-session"></span>
+      <span class="right">
+        <span class="kv">sniper <b>idle</b></span>
+        <span class="kv"><b id="now">--:--:--</b></span>
+      </span>
+    </div>
+
+    <nav class="tabs" id="tabs" aria-label="facilities"></nav>
+
+    <div class="main" id="main"></div>
+
+    <fieldset class="box">
+      <legend><b>log</b> <span class="hint">· tail -f</span></legend>
+      <div class="log" id="log" role="log" aria-live="polite"></div>
+      <form class="prompt" id="prompt-form" autocomplete="off">
+        <label class="ps" for="cmd">🥒&gt;</label>
+        <input id="cmd" type="text" spellcheck="false" placeholder="help">
+      </form>
+    </fieldset>
+  </div>
+
+  <template id="tpl-onboard">
+    <fieldset class="box">
+      <legend><b>add facility</b></legend>
+      <div class="onboard">
+        <div>
+          <pre class="ball" id="ball" aria-hidden="true"></pre>
+          <div class="ball-cap">no facilities yet</div>
+        </div>
+        <form class="form" id="add-form">
+          <div class="field">
+            <label for="f-facility">facility</label>
+            <input id="f-facility" name="facility" required placeholder="https://app.courtreserve.com/Online/Portal/Index/16870  or  16870">
+          </div>
+          <div class="field">
+            <label for="f-username">username</label>
+            <input id="f-username" name="username" required autocomplete="username" placeholder="you@example.com">
+          </div>
+          <div class="field">
+            <label for="f-password">password</label>
+            <input id="f-password" name="password" type="password" required autocomplete="current-password">
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="submit" id="add-submit">verify and save</button>
+            <button class="btn" type="button" id="add-cancel" hidden>cancel</button>
+            <span class="form-msg" id="add-msg" role="status"></span>
+          </div>
+        </form>
+      </div>
+    </fieldset>
+  </template>
+
+  <template id="tpl-dash">
+    <fieldset class="box">
+      <legend><b>session</b> <span class="hint" id="sess-hint"></span></legend>
+      <div class="armed">
+        <div>
+          <pre class="ball" id="ball" aria-hidden="true"></pre>
+        </div>
+        <div class="target">
+          <div class="target" id="sess-rows"></div>
+          <div class="actions">
+            <label class="inline" for="f-time">next day opens at <input id="f-time" type="time" step="60"></label>
+            <button class="btn" type="button" id="b-check">c check session</button>
+            <button class="btn danger" type="button" id="b-remove">x remove facility</button>
+            <span class="form-msg" id="sess-msg" role="status"></span>
+          </div>
+        </div>
+        <div class="count">
+          <div class="lbl">until release · nothing armed</div>
+          <pre class="big" id="digits"></pre>
+          <div class="days">no targets yet</div>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="box">
+      <legend><b id="courts-date">courts</b> <span class="hint" id="courts-hint"></span></legend>
+      <div class="daynav">
+        <button class="btn" type="button" id="d-prev">&lt;</button>
+        <div class="days" id="days"></div>
+        <button class="btn" type="button" id="d-next">&gt;</button>
+        <span class="form-msg" id="courts-msg" role="status"></span>
+      </div>
+      <div class="slots" id="slots"></div>
+      <div class="legend">
+        <span class="on">█ available</span>
+        <span class="none">· full</span>
+        <span class="soon">· not open yet</span>
+        <span class="dim">· past</span>
+      </div>
+      <div class="events-head"><span>open play</span> <span class="form-msg" id="events-msg" role="status"></span></div>
+      <div class="events" id="events"></div>
+    </fieldset>
+  </template>
+
+  <script src="{{ url_for('static', filename='ball.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
