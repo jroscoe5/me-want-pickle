@@ -74,9 +74,8 @@
           <pre class="ball" id="ball" aria-hidden="true"></pre>
         </div>
         <div class="target">
-          <div class="target" id="sess-rows"></div>
+          <div class="rows" id="sess-rows"></div>
           <div class="actions">
-            <label class="inline" for="f-time">next day opens at <input id="f-time" type="time" step="60"></label>
             <button class="btn" type="button" id="b-check">c check session</button>
             <button class="btn danger" type="button" id="b-remove">x remove facility</button>
             <span class="form-msg" id="sess-msg" role="status"></span>
@@ -85,7 +84,7 @@
         <div class="count">
           <div class="lbl">until release · nothing armed</div>
           <pre class="big" id="digits"></pre>
-          <div class="days">no targets yet</div>
+          <div class="sub">no targets yet</div>
         </div>
       </div>
     </fieldset>
@@ -96,16 +95,16 @@
         <button class="btn" type="button" id="d-prev">&lt;</button>
         <div class="days" id="days"></div>
         <button class="btn" type="button" id="d-next">&gt;</button>
-        <span class="form-msg" id="courts-msg" role="status"></span>
+        <span class="legend">
+          <span class="on">█ available</span>
+          <span class="none">· full</span>
+          <span class="soon">· not open yet</span>
+          <span class="dim">· past</span>
+        </span>
       </div>
+      <div class="section-head"><span>court reservations</span> <span class="form-msg" id="courts-msg" role="status"></span></div>
       <div class="slots" id="slots"></div>
-      <div class="legend">
-        <span class="on">█ available</span>
-        <span class="none">· full</span>
-        <span class="soon">· not open yet</span>
-        <span class="dim">· past</span>
-      </div>
-      <div class="events-head"><span>open play</span> <span class="form-msg" id="events-msg" role="status"></span></div>
+      <div class="section-head"><span>open play</span> <span class="form-msg" id="events-msg" role="status"></span></div>
       <div class="events" id="events"></div>
     </fieldset>
   </template>

@@ -6,7 +6,7 @@ import html
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -45,6 +45,8 @@ class Scheduler:
     min_interval: int = 60
     book_min: datetime | None = None
     book_max: datetime | None = None
+    open_time: str | None = None
+    close_time: str | None = None
 
 
 @dataclass
@@ -59,6 +61,7 @@ class Slot:
     is_closed: bool = False
     show_waitlist: bool = False
     waitlist_count: int | None = None
+    member_ids: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -124,6 +127,8 @@ _CATEGORY_RE = re.compile(r'id="category_checkbox_(\d+)".{0,500}?"label":"([^"]*
 _CARD_SPLIT = 'data-testid="event-card"'
 _TIME_RE = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*([ap])", re.I)
 _SPOTS_RE = re.compile(r"(\d+)\s+of\s+(\d+)")
+_SCHED_START_RE = re.compile(r'"startTime"\s*:\s*new Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)(?:,(\d+))?\)')
+_SCHED_END_RE = re.compile(r'"endTime"\s*:\s*new Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)(?:,(\d+))?\)')
 _SCHED_MIN_RE = re.compile(r'"min"\s*:\s*new Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)(?:,(\d+))?\)')
 _SCHED_MAX_RE = re.compile(r'"max"\s*:\s*new Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)(?:,(\d+))?\)')
 
@@ -151,7 +156,7 @@ class CourtReserveClient:
     def bookings_url(self, scheduler_id: int) -> str:
         return f"{APP_HOST}/Online/Reservations/Bookings/{self.org_id}?sId={scheduler_id}"
 
-    def login(self, username: str, password: str) -> dict:
+    def login(self, username: str, password: str) -> None:
         try:
             r0 = self.s.get(self.login_url, timeout=self.timeout)
             m = _AF_INPUT_RE.search(r0.text)
@@ -193,7 +198,7 @@ class CourtReserveClient:
             if isinstance(data, dict):
                 valid = data.get("isValid", data.get("IsValid"))
                 if valid:
-                    return {"via": "json", "redirect": data.get("redirectUrl")}
+                    return
                 msg = data.get("message") or data.get("Message") or "username or password rejected"
                 raise LoginError(str(msg))
 
@@ -204,7 +209,7 @@ class CourtReserveClient:
             raise LoginError("CourtReserve says the account is locked or needs verification; sign in on the website first")
 
         if self.is_logged_in():
-            return {"via": "portal-check", "redirect": None}
+            return
         raise LoginError(
             f"login did not establish a session (HTTP {r.status_code}, {ctype.split(';')[0] or 'no content type'})"
         )
@@ -231,23 +236,11 @@ class CourtReserveClient:
             title = html.unescape(m.group(1))
             name = title.split("| powered by")[0].strip() or name
 
-        def first_int(rx: re.Pattern[str]) -> int | None:
-            mm = rx.search(text)
-            return int(mm.group(1)) if mm else None
-
-        tz = None
         mt = _TZ_RE.search(text)
-        if mt:
-            tz = mt.group(1)
-
         return FacilityInfo(
-            org_id=self.org_id,
-            name=name,
-            timezone=tz,
-            cost_type_id=first_int(_COST_TYPE_RE),
-            member_id=first_int(_MEMBER_ID_RE),
+            org_id=self.org_id, name=name, timezone=mt.group(1) if mt else None,
+            cost_type_id=_first_int(_COST_TYPE_RE, text), member_id=_first_int(_MEMBER_ID_RE, text),
         )
-
 
     def schedulers(self) -> list[Scheduler]:
         try:
@@ -258,29 +251,27 @@ class CourtReserveClient:
         for sid in _SID_RE.findall(portal):
             if int(sid) not in seen:
                 seen.append(int(sid))
-        out = []
-        for sid in seen:
-            try:
-                page = self.s.get(self.bookings_url(sid), timeout=self.timeout).text
-            except requests.RequestException as e:
-                raise CourtReserveError(f"network error fetching scheduler {sid}: {e}") from e
-            name = f"scheduler {sid}"
-            m = _TITLE_RE.search(page)
-            if m:
-                name = html.unescape(m.group(1)).split("| powered by")[0].strip() or name
-            mc = _COST_TYPE_RE.search(page)
-            mt = _TZ_RE.search(page)
-            mi = _MIN_INTERVAL_RE.search(page)
-            tz = ZoneInfo(mt.group(1)) if mt else None
-            out.append(Scheduler(
-                id=sid, name=name,
-                cost_type_id=int(mc.group(1)) if mc else None,
-                timezone=mt.group(1) if mt else None,
-                min_interval=int(mi.group(1)) if mi else 60,
-                book_min=_js_date(_SCHED_MIN_RE.search(page), tz),
-                book_max=_js_date(_SCHED_MAX_RE.search(page), tz),
-            ))
-        return out
+        return [self._scheduler_page(sid) for sid in seen]
+
+    def _scheduler_page(self, sid: int) -> Scheduler:
+        try:
+            page = self.s.get(self.bookings_url(sid), timeout=self.timeout).text
+        except requests.RequestException as e:
+            raise CourtReserveError(f"network error fetching scheduler {sid}: {e}") from e
+        if not _looks_logged_in(page, self.bookings_url(sid)):
+            raise LoginError("session expired")
+        name = f"scheduler {sid}"
+        m = _TITLE_RE.search(page)
+        if m:
+            name = html.unescape(m.group(1)).split("| powered by")[0].strip() or name
+        mt = _TZ_RE.search(page)
+        tz = ZoneInfo(mt.group(1)) if mt else None
+        return Scheduler(
+            id=sid, name=name, cost_type_id=_first_int(_COST_TYPE_RE, page), timezone=mt.group(1) if mt else None,
+            min_interval=_first_int(_MIN_INTERVAL_RE, page) or 60,
+            book_min=_js_date(_SCHED_MIN_RE.search(page), tz), book_max=_js_date(_SCHED_MAX_RE.search(page), tz),
+            open_time=_js_time(_SCHED_START_RE.search(page)), close_time=_js_time(_SCHED_END_RE.search(page)),
+        )
 
     def events_context(self) -> EventsContext:
         referer = f"{APP_HOST}/Online/Events/List/{self.org_id}"
@@ -326,15 +317,8 @@ class CourtReserveClient:
         return [ev for ev in (_parse_card(c) for c in (j.get("data") or "").split(_CARD_SPLIT)[1:]) if ev]
 
     def booking_horizon(self, scheduler_id: int) -> tuple[datetime | None, datetime | None]:
-        try:
-            page = self.s.get(self.bookings_url(scheduler_id), timeout=self.timeout).text
-        except requests.RequestException as e:
-            raise CourtReserveError(f"network error fetching scheduler {scheduler_id}: {e}") from e
-        if not _looks_logged_in(page, self.bookings_url(scheduler_id)):
-            raise LoginError("session expired")
-        mt = _TZ_RE.search(page)
-        tz = ZoneInfo(mt.group(1)) if mt else None
-        return _js_date(_SCHED_MIN_RE.search(page), tz), _js_date(_SCHED_MAX_RE.search(page), tz)
+        sched = self._scheduler_page(scheduler_id)
+        return sched.book_min, sched.book_max
 
     def read_slots(self, sched: Scheduler, day: date) -> list[Slot]:
         tz = ZoneInfo(sched.timezone or "UTC")
@@ -387,9 +371,15 @@ class CourtReserveClient:
                 is_closed=bool(row.get("IsClosed")),
                 show_waitlist=bool(row.get("ShowWaitList")),
                 waitlist_count=row.get("WaitListCount"),
+                member_ids=[int(x) for x in (row.get("MemberIds") or []) if str(x).isdigit()],
             ))
         out.sort(key=lambda x: x.start)
         return out
+
+
+def _first_int(rx: re.Pattern[str], text: str) -> int | None:
+    m = rx.search(text)
+    return int(m.group(1)) if m else None
 
 
 def _looks_logged_in(page: str, final_url: str) -> bool:
@@ -431,6 +421,12 @@ def _parse_card(card: str) -> Event | None:
         action=re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", reg.group(2))).strip() if reg else "",
         details_path=path, reservation_id=int(rid.group(1)) if rid else None,
     )
+
+
+def _js_time(m: re.Match[str] | None) -> str | None:
+    if not m:
+        return None
+    return f"{int(m.group(4)):02d}:{int(m.group(5)):02d}"
 
 
 def _js_date(m: re.Match[str] | None, tz: ZoneInfo | None) -> datetime | None:

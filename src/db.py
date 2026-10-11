@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from collections.abc import Generator
+from datetime import datetime, timezone
 from typing import Any
 
 from . import config
@@ -21,7 +21,6 @@ CREATE TABLE IF NOT EXISTS facilities (
     member_id     INTEGER,
     created_at    TEXT    NOT NULL,
     verified_at   TEXT,
-    release_time  TEXT    NOT NULL DEFAULT '00:00',
     horizon_min   TEXT,
     horizon_max   TEXT,
     horizon_at    TEXT
@@ -37,6 +36,8 @@ CREATE TABLE IF NOT EXISTS schedulers (
     min_interval  INTEGER NOT NULL DEFAULT 60,
     court_count   INTEGER NOT NULL DEFAULT 0,
     position      INTEGER NOT NULL DEFAULT 0,
+    open_time     TEXT,
+    close_time    TEXT,
     UNIQUE (facility_id, scheduler_id)
 );
 
@@ -70,10 +71,11 @@ def connect() -> Generator[sqlite3.Connection, None, None]:
 
 
 MIGRATIONS = [
-    ("facilities", "release_time", "ALTER TABLE facilities ADD COLUMN release_time TEXT NOT NULL DEFAULT '00:00'"),
     ("facilities", "horizon_min", "ALTER TABLE facilities ADD COLUMN horizon_min TEXT"),
     ("facilities", "horizon_max", "ALTER TABLE facilities ADD COLUMN horizon_max TEXT"),
     ("facilities", "horizon_at", "ALTER TABLE facilities ADD COLUMN horizon_at TEXT"),
+    ("schedulers", "open_time", "ALTER TABLE schedulers ADD COLUMN open_time TEXT"),
+    ("schedulers", "close_time", "ALTER TABLE schedulers ADD COLUMN close_time TEXT"),
 ]
 
 
@@ -84,20 +86,6 @@ def init_db() -> None:
             cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
             if column not in cols:
                 conn.execute(ddl)
-
-
-def update_facility(facility_id: int, **fields: Any) -> None:
-    allowed = {"release_time", "horizon_min", "horizon_max", "horizon_at"}
-    sets, vals = [], []
-    for k, v in fields.items():
-        if k in allowed:
-            sets.append(f"{k} = ?")
-            vals.append(v)
-    if not sets:
-        return
-    vals.append(facility_id)
-    with connect() as conn:
-        conn.execute(f"UPDATE facilities SET {', '.join(sets)} WHERE id = ?", vals)
 
 
 def list_facilities() -> list[dict[str, Any]]:
@@ -126,7 +114,6 @@ def insert_facility(
     timezone: str | None,
     cost_type_id: int | None,
     member_id: int | None,
-    verified: bool,
 ) -> dict[str, Any]:
     ts = now_iso()
     with connect() as conn:
@@ -134,7 +121,7 @@ def insert_facility(
             """INSERT INTO facilities
                (org_id, name, username, timezone, cost_type_id, member_id, created_at, verified_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (org_id, name, username, timezone, cost_type_id, member_id, ts, ts if verified else None),
+            (org_id, name, username, timezone, cost_type_id, member_id, ts, ts),
         )
         row = conn.execute("SELECT * FROM facilities WHERE id = ?", (cur.lastrowid,)).fetchone()
     return dict(row)
@@ -148,6 +135,20 @@ def mark_verified(facility_id: int, **fields: Any) -> None:
         if k in allowed and v is not None:
             sets.append(f"{k} = ?")
             vals.append(v)
+    vals.append(facility_id)
+    with connect() as conn:
+        conn.execute(f"UPDATE facilities SET {', '.join(sets)} WHERE id = ?", vals)
+
+
+def update_facility(facility_id: int, **fields: Any) -> None:
+    allowed = {"horizon_min", "horizon_max", "horizon_at"}
+    sets, vals = [], []
+    for k, v in fields.items():
+        if k in allowed:
+            sets.append(f"{k} = ?")
+            vals.append(v)
+    if not sets:
+        return
     vals.append(facility_id)
     with connect() as conn:
         conn.execute(f"UPDATE facilities SET {', '.join(sets)} WHERE id = ?", vals)
@@ -179,14 +180,14 @@ def replace_schedulers(facility_id: int, items: list[dict[str, Any]]) -> list[di
             conn.execute("DELETE FROM schedulers WHERE facility_id = ?", (facility_id,))
         for pos, it in enumerate(items):
             conn.execute(
-                """INSERT INTO schedulers (facility_id, scheduler_id, name, cost_type_id, timezone, min_interval, position)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO schedulers (facility_id, scheduler_id, name, cost_type_id, timezone, min_interval, position, open_time, close_time)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(facility_id, scheduler_id) DO UPDATE SET
                      name = excluded.name, cost_type_id = excluded.cost_type_id,
                      timezone = excluded.timezone, min_interval = excluded.min_interval,
-                     position = excluded.position""",
+                     position = excluded.position, open_time = excluded.open_time, close_time = excluded.close_time""",
                 (facility_id, it["scheduler_id"], it["name"], it.get("cost_type_id"),
-                 it.get("timezone"), it.get("min_interval", 60), pos),
+                 it.get("timezone"), it.get("min_interval", 60), pos, it.get("open_time"), it.get("close_time")),
             )
         conn.execute("COMMIT")
     return list_schedulers(facility_id)

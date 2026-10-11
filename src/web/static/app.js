@@ -86,9 +86,7 @@
       var b = e.target.closest('button'); if (!b) return;
       state.day = b.dataset.day; renderDays(); loadSlots(); loadEvents();
     });
-    $('f-time').value = f.release_time || '00:00';
-    $('f-time').addEventListener('change', onWindow);
-    var days = dayList(f);
+    var days = dayList();
     if (days.indexOf(state.day) < 0) state.day = days[0];
     renderDays();
     loadSlots();
@@ -110,61 +108,74 @@
     state.eventsTimer = setTimeout(loadEvents, 120000);
   }
 
+  function actionFor(e) {
+    var act = (e.action || '').toLowerCase();
+    if (act.indexOf('wait') >= 0) return { cls: 'wait', label: 'waitlist me' };
+    if (act.indexOf('register') >= 0) return { cls: 'reg', label: 'register me' };
+    return { cls: 'want', label: 'me want' };
+  }
+
   function renderEvents(data) {
     var el = $('events');
     if (!data.events.length) { el.innerHTML = '<div class="empty">no open play listed for ' + esc(fmtDay(data.date)) + '</div>'; return; }
-    el.innerHTML = data.events.map(function (e) {
-      var cls = 'full', txt = e.spots;
-      if (e.spots_left != null && e.spots_total) {
-        txt = e.spots_left + '/' + e.spots_total + ' open';
-        cls = e.spots_left === 0 ? 'full' : (e.spots_left <= 3 ? 'low' : 'open');
-      }
-      var time = (e.start || '') + (e.end ? '-' + e.end : '');
-      var tags = e.tags.length ? ' <span class="tag">' + esc(e.tags.join(' ')) + '</span>' : '';
-      var cat = e.category && e.category.toLowerCase() !== 'open play' ? ' <span class="cat">· ' + esc(e.category.toLowerCase()) + '</span>' : '';
-      return '<div class="ev"><span class="t">' + esc(time) + '</span><span class="n">' + esc(e.name) + tags + cat + '</span><span class="s ' + cls + '">' + esc(txt) + '</span><span class="a">' + esc(e.cost) + ' · <a href="' + esc(e.details_url) + '" target="_blank" rel="noopener">' + esc(e.action.toLowerCase() || 'details') + '</a></span></div>';
+    var names = [], times = [];
+    data.events.forEach(function (e) {
+      if (names.indexOf(e.name) < 0) names.push(e.name);
+      var t = (e.start || '') + (e.end ? '-' + e.end : '');
+      if (times.indexOf(t) < 0) times.push(t);
+    });
+    names.sort(); times.sort();
+    el.style.gridTemplateColumns = '11ch ' + names.map(function () { return 'max-content'; }).join(' ');
+    var html = '<div class="head">time</div>' + names.map(function (n) {
+      return '<div class="head"><span class="tag">' + esc(n.replace(/ open play$/i, '').toLowerCase()) + '</span></div>';
     }).join('');
+    times.forEach(function (t) {
+      html += '<div class="hr">' + esc(t) + '</div>';
+      names.forEach(function (n) {
+        var e = data.events.find(function (x) { return x.name === n && ((x.start || '') + (x.end ? '-' + x.end : '')) === t; });
+        if (!e) { html += '<div class="evc"><span class="act-slot"></span><span class="s dim">·</span></div>'; return; }
+        var a = actionFor(e), cls = 'open', txt = e.spots;
+        if (a.cls === 'want') cls = 'soon';
+        else if (e.spots_left != null && e.spots_total) cls = e.spots_left === 0 ? 'full' : (e.spots_left <= 3 ? 'low' : 'open');
+        if (e.spots_left != null && e.spots_total) txt = e.spots_left + '/' + e.spots_total;
+        html += '<div class="evc"><button type="button" class="act ' + a.cls + '" data-kind="event" data-rid="' + esc(e.reservation_id) + '" data-name="' + esc(e.name) + '" data-when="' + esc(state.day + ' ' + t) + '">' + a.label + '</button><span class="s ' + cls + '">' + esc(txt) + '</span></div>';
+      });
+    });
+    el.innerHTML = html;
   }
 
+  var DAYS_SHOWN = 28;
   function isoOf(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
-  function dayList(f) {
+  function isoToday() { return isoOf(new Date()); }
+  function dayList() {
     var out = [], d = new Date(isoToday() + 'T12:00:00');
-    var last = f.horizon_max ? new Date(f.horizon_max.slice(0, 10) + 'T12:00:00') : d;
-    while (d <= last) { out.push(isoOf(d)); d.setDate(d.getDate() + 1); }
-    out.push(isoOf(d));
+    for (var i = 0; i < DAYS_SHOWN; i++) { out.push(isoOf(d)); d.setDate(d.getDate() + 1); }
     return out;
   }
 
   function renderDays() {
     var f = activeFacility(); if (!f || !$('days')) return;
-    var days = dayList(f), i = days.indexOf(state.day);
-    $('days').innerHTML = days.map(function (d, idx) {
+    var days = dayList(), i = days.indexOf(state.day);
+    var horizon = f.horizon_max ? f.horizon_max.slice(0, 10) : null;
+    $('days').innerHTML = days.map(function (d) {
       var dt = new Date(d + 'T12:00:00');
       var label = dt.toLocaleDateString('en-US', { weekday: 'short' }).toLowerCase() + ' ' + dt.getDate();
-      var cls = (d === state.day ? 'active' : '') + (idx === days.length - 1 ? ' next' : '');
+      var cls = (d === state.day ? 'active' : '') + (horizon && d > horizon ? ' next' : '');
       return '<button type="button" data-day="' + d + '" class="' + cls + '">' + label + '</button>';
     }).join('');
     $('d-prev').disabled = i <= 0;
     $('d-next').disabled = i >= days.length - 1;
+    var el = $('days'), btn = el.children[i];
+    if (btn) {
+      var left = btn.offsetLeft - el.offsetLeft, right = left + btn.offsetWidth;
+      if (left < el.scrollLeft) el.scrollLeft = left;
+      else if (right > el.scrollLeft + el.clientWidth) el.scrollLeft = right - el.clientWidth;
+    }
   }
 
-  async function onWindow() {
-    var f = activeFacility(); if (!f) return;
-    var data = await api('PATCH', '/api/facilities/' + f.id, { release_time: $('f-time').value || '00:00' });
-    if (!data.ok) { setMsg('sess-msg', data.error, 'err'); return; }
-    var i = state.facilities.findIndex(function (x) { return x.id === f.id; });
-    if (i >= 0) state.facilities[i] = data.facility;
-    await pollLog();
-    loadSlots();
-  }
-
-  function isoToday() {
-    var t = new Date();
-    return t.getFullYear() + '-' + pad(t.getMonth() + 1) + '-' + pad(t.getDate());
-  }
   function shiftDay(n) {
-    var f = activeFacility(); if (!f) return;
-    var days = dayList(f), i = days.indexOf(state.day) + n;
+    if (!activeFacility()) return;
+    var days = dayList(), i = days.indexOf(state.day) + n;
     if (i < 0 || i >= days.length) return;
     state.day = days[i];
     renderDays();
@@ -197,19 +208,30 @@
     return d.toLocaleDateString('en-US', { weekday: 'short' }).toLowerCase() + ' ' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
-  function bar(sl, total) {
+  function bar(sl, total, group) {
     var cls = 'bar', dots = '·'.repeat(Math.max(total, 1));
-    if (sl.past || sl.closed) cls += ' past';
-    if (!sl.open && !sl.past) {
-      return '<div class="' + cls + ' soon"><span class="n">' + dots + ' opens ' + esc(fmtOpens(sl.opens_at)) + '</span></div>';
-    }
-    if (!sl.available) {
-      cls += ' none';
-      var wl = sl.waitlist ? ' · ' + sl.waitlist + ' waiting' : '';
-      return '<div class="' + cls + '"><span class="n">' + dots + ' ' + (sl.closed ? 'closed' : 'full') + esc(wl) + '</span></div>';
+    var past = sl.past || sl.closed;
+    if (past) cls += ' past';
+    var act = '<span class="act-slot"></span>';
+    if (!past) {
+      var a = !sl.open ? { cls: 'want', label: 'me want' }
+        : sl.available ? { cls: 'reg', label: 'register me' }
+        : sl.waitlisted ? { cls: 'mine', label: 'waiting' }
+        : sl.waitlistable ? { cls: 'wait', label: 'waitlist me' } : null;
+      act = a ? '<button type="button" class="act ' + a.cls + '" data-kind="court" data-name="' + esc(group) + '" data-when="' + esc(state.day + ' ' + sl.start) + '">' + a.label + '</button>' : '<span class="act-slot"></span>';
     }
     var on = '█'.repeat(sl.available), off = '░'.repeat(Math.max(0, total - sl.available));
-    return '<div class="' + cls + '"><span class="on">' + on + '</span><span class="off">' + off + '</span> <span class="n">' + String(sl.available).padStart(2, ' ') + '/' + total + '</span></div>';
+    var count = String(sl.available).padStart(2, ' ') + '/' + total;
+    if (!sl.open && !past) {
+      var fill = sl.available ? '<span class="on">' + on + '</span><span class="off">' + off + '</span> <span class="n">' + count + '</span>' : '<span class="n">' + dots + ' full</span>';
+      return '<div class="' + cls + ' soon">' + act + fill + ' <span class="n">· opens ' + esc(fmtOpens(sl.opens_at)) + '</span></div>';
+    }
+    if (!sl.available) {
+      var wl = sl.waitlist ? ' · ' + sl.waitlist + ' waiting' : '';
+      var word = sl.closed ? 'closed' : (sl.waitlistable ? 'full' : 'full · no waitlist');
+      return '<div class="' + cls + ' none' + (sl.waitlisted ? ' mine' : '') + '">' + act + '<span class="n">' + dots + ' ' + word + esc(wl) + '</span></div>';
+    }
+    return '<div class="' + cls + '">' + act + '<span class="on">' + on + '</span><span class="off">' + off + '</span> <span class="n">' + count + '</span></div>';
   }
 
   function renderSlots(data) {
@@ -220,13 +242,14 @@
     groups.forEach(function (g) { g.slots.forEach(function (s) { hours[s.start] = 1; }); });
     var keys = Object.keys(hours).sort();
     var html = '<div class="head">hour</div>' + groups.map(function (g) {
-      return '<div class="head">' + esc(g.name.toLowerCase()) + ' <span class="dim">' + g.court_count + '</span></div>';
+      var hrs = g.open_time && g.close_time ? ' · ' + esc(g.open_time) + '-' + esc(g.close_time) : '';
+      return '<div class="head">' + esc(g.name.toLowerCase()) + ' <span class="dim">' + g.court_count + ' courts' + hrs + '</span></div>';
     }).join('');
     keys.forEach(function (k) {
       html += '<div class="hr">' + esc(k) + '</div>';
       groups.forEach(function (g) {
         var sl = g.slots.find(function (s) { return s.start === k; });
-        html += sl ? bar(sl, g.court_count) : '<div class="bar past"><span class="n">·</span></div>';
+        html += sl ? bar(sl, g.court_count, g.name) : '<div class="bar past"><span class="act-slot"></span><span class="n">·</span></div>';
       });
     });
     el.innerHTML = html;
@@ -360,6 +383,11 @@
       state.active = f.id; state.adding = false; return render();
     }
     appendLogLine({ ts: '', level: 'warn', source: 'ui', message: 'unknown command "' + cmd + '" · ' + HELP });
+  });
+
+  $('main').addEventListener('click', function (e) {
+    var b = e.target.closest('button.act');
+    if (b) appendLogLine({ ts: new Date().toISOString(), level: 'warn', source: 'target', message: b.textContent + ': ' + b.dataset.name + ' ' + b.dataset.when + ' · arming lands in the next step' });
   });
 
   $('tabs').addEventListener('click', function (e) {
