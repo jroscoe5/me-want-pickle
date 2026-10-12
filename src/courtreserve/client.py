@@ -2,135 +2,34 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import re
-from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
-from urllib.parse import urlparse
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
 
+from ..watcher.forms import FormSpec, parse_form, redacted
+from .models import (
+    Booking, BookingsToken, CourtReserveError, Event, EventCategory, EventsContext, FacilityInfo, LoginError, Member,
+    ReservationType, Scheduler, Slot,
+)
+from .parse import (
+    AF_INPUT_RE, APILIST_RE, BAD_CREDS_RE, CARD_SPLIT, CATEGORY_RE, COST_TYPE_RE, FIXURL_RE, JWT_RE, LOADEVENTS_RE,
+    LOCKED_RE, MEMBER_ID_RE, MIN_INTERVAL_RE, REQDATA_ATTR_RE, SCHED_END_RE, SCHED_MAX_RE, SCHED_MIN_RE, SCHED_START_RE,
+    SID_RE, SIGNUP_GET_RE, TITLE_RE, TZ_RE, first_int, js_date, js_time, looks_logged_in, ms_to_local, parse_card, refusal,
+)
+
 APP_HOST = "https://app.courtreserve.com"
+API4_HOST = "https://api4.courtreserve.com"
+BACKEND_HOST = "https://backend.courtreserve.com"
+ALLOW_SUBMIT = False
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 )
-
-
-class CourtReserveError(Exception):
-    pass
-
-
-class LoginError(CourtReserveError):
-    pass
-
-
-@dataclass
-class FacilityInfo:
-    org_id: int
-    name: str
-    timezone: str | None = None
-    cost_type_id: int | None = None
-    member_id: int | None = None
-
-
-@dataclass
-class Scheduler:
-    id: int
-    name: str
-    cost_type_id: int | None = None
-    timezone: str | None = None
-    min_interval: int = 60
-    book_min: datetime | None = None
-    book_max: datetime | None = None
-    open_time: str | None = None
-    close_time: str | None = None
-
-
-@dataclass
-class Slot:
-    start: datetime
-    end: datetime
-    court_type: str
-    court_type_id: int | None
-    available: int
-    court_ids: list[int] = field(default_factory=list)
-    is_past: bool = False
-    is_closed: bool = False
-    show_waitlist: bool = False
-    waitlist_count: int | None = None
-    member_ids: list[int] = field(default_factory=list)
-
-
-@dataclass
-class EventCategory:
-    id: int
-    name: str
-
-
-@dataclass
-class EventsContext:
-    load_url: str
-    categories: list[EventCategory]
-    fetched_at: datetime
-
-
-@dataclass
-class Event:
-    category: str
-    name: str
-    when: str
-    start: str | None
-    end: str | None
-    cost: str
-    spots: str
-    spots_left: int | None
-    spots_total: int | None
-    tags: list[str]
-    action: str
-    details_path: str
-    reservation_id: int | None
-
-
-_ORG_URL_RE = re.compile(r"/(?:Online|Portal)/[A-Za-z]+/[A-Za-z]+/(\d{3,8})(?:[/?#]|$)")
-
-
-def parse_org_id(value: str) -> int:
-    value = value.strip()
-    if value.isdigit():
-        return int(value)
-    m = _ORG_URL_RE.search(value)
-    if m:
-        return int(m.group(1))
-    path = urlparse(value).path
-    m = re.search(r"(\d{4,7})", path)
-    if m:
-        return int(m.group(1))
-    raise ValueError("could not find a facility id; paste the portal URL or the numeric id")
-
-
-_TITLE_RE = re.compile(r"<title>\s*(.*?)\s*</title>", re.I | re.S)
-_AF_INPUT_RE = re.compile(r'__RequestVerificationToken[^>]*value="([^"]+)"')
-_BAD_CREDS_RE = re.compile(r"username or password is incorrect", re.I)
-_LOCKED_RE = re.compile(r"account (?:is )?locked|too many (?:failed )?attempts|verify your (?:email|account)", re.I)
-_MEMBER_ID_RE = re.compile(r"(?:memberId|authUserId)[=~]'?(\d{4,10})")
-_COST_TYPE_RE = re.compile(r"[Cc]ostTypeI[dD]['\"]?\s*[:=]\s*['\"]?(\d{3,10})")
-_TZ_RE = re.compile(r"TimeZone['\"]?\s*:\s*['\"]([A-Za-z_]+/[A-Za-z_]+)['\"]")
-_SID_RE = re.compile(r"/Online/Reservations/Bookings/\d+\?sId=(\d+)")
-_MIN_INTERVAL_RE = re.compile(r"ReservationMinInterval['\"]?\s*:\s*['\"]?(\d+)")
-_MS_DATE_RE = re.compile(r"/Date\((-?\d+)\)/")
-_APILIST_RE = re.compile(r"var url = '(https://events\.courtreserve\.com/Online/EventsApi/ApiList[^']+)'")
-_LOADEVENTS_RE = re.compile(r"https://events\.courtreserve\.com/Online/EventsApi/ApiLoadEvents[^'\"]+")
-_CATEGORY_RE = re.compile(r'id="category_checkbox_(\d+)".{0,500}?"label":"([^"]*)"', re.S)
-_CARD_SPLIT = 'data-testid="event-card"'
-_TIME_RE = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*([ap])", re.I)
-_SPOTS_RE = re.compile(r"(\d+)\s+of\s+(\d+)")
-_SCHED_START_RE = re.compile(r'"startTime"\s*:\s*new Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)(?:,(\d+))?\)')
-_SCHED_END_RE = re.compile(r'"endTime"\s*:\s*new Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)(?:,(\d+))?\)')
-_SCHED_MIN_RE = re.compile(r'"min"\s*:\s*new Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)(?:,(\d+))?\)')
-_SCHED_MAX_RE = re.compile(r'"max"\s*:\s*new Date\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)(?:,(\d+))?\)')
 
 
 class CourtReserveClient:
@@ -159,7 +58,7 @@ class CourtReserveClient:
     def login(self, username: str, password: str) -> None:
         try:
             r0 = self.s.get(self.login_url, timeout=self.timeout)
-            m = _AF_INPUT_RE.search(r0.text)
+            m = AF_INPUT_RE.search(r0.text)
             token = m.group(1) if m else None
             headers = {
                 "Accept": "application/json, text/plain, */*",
@@ -203,9 +102,9 @@ class CourtReserveClient:
                 raise LoginError(str(msg))
 
         text = r.text
-        if _BAD_CREDS_RE.search(text):
+        if BAD_CREDS_RE.search(text):
             raise LoginError("the username or password is incorrect")
-        if _LOCKED_RE.search(text):
+        if LOCKED_RE.search(text):
             raise LoginError("CourtReserve says the account is locked or needs verification; sign in on the website first")
 
         if self.is_logged_in():
@@ -219,7 +118,7 @@ class CourtReserveClient:
             r = self.s.get(self.portal_url, timeout=self.timeout, allow_redirects=True)
         except requests.RequestException:
             return False
-        return _looks_logged_in(r.text, r.url)
+        return looks_logged_in(r.text, r.url)
 
     def facility_info(self) -> FacilityInfo:
         try:
@@ -227,19 +126,19 @@ class CourtReserveClient:
         except requests.RequestException as e:
             raise CourtReserveError(f"network error fetching portal: {e}") from e
         text = r.text
-        if not _looks_logged_in(text, r.url):
+        if not looks_logged_in(text, r.url):
             raise LoginError("session is not signed in to this facility")
 
         name = f"facility {self.org_id}"
-        m = _TITLE_RE.search(text)
+        m = TITLE_RE.search(text)
         if m:
             title = html.unescape(m.group(1))
             name = title.split("| powered by")[0].strip() or name
 
-        mt = _TZ_RE.search(text)
+        mt = TZ_RE.search(text)
         return FacilityInfo(
             org_id=self.org_id, name=name, timezone=mt.group(1) if mt else None,
-            cost_type_id=_first_int(_COST_TYPE_RE, text), member_id=_first_int(_MEMBER_ID_RE, text),
+            cost_type_id=first_int(COST_TYPE_RE, text), member_id=first_int(MEMBER_ID_RE, text),
         )
 
     def schedulers(self) -> list[Scheduler]:
@@ -248,7 +147,7 @@ class CourtReserveClient:
         except requests.RequestException as e:
             raise CourtReserveError(f"network error fetching portal: {e}") from e
         seen: list[int] = []
-        for sid in _SID_RE.findall(portal):
+        for sid in SID_RE.findall(portal):
             if int(sid) not in seen:
                 seen.append(int(sid))
         return [self._scheduler_page(sid) for sid in seen]
@@ -258,28 +157,28 @@ class CourtReserveClient:
             page = self.s.get(self.bookings_url(sid), timeout=self.timeout).text
         except requests.RequestException as e:
             raise CourtReserveError(f"network error fetching scheduler {sid}: {e}") from e
-        if not _looks_logged_in(page, self.bookings_url(sid)):
+        if not looks_logged_in(page, self.bookings_url(sid)):
             raise LoginError("session expired")
         name = f"scheduler {sid}"
-        m = _TITLE_RE.search(page)
+        m = TITLE_RE.search(page)
         if m:
             name = html.unescape(m.group(1)).split("| powered by")[0].strip() or name
-        mt = _TZ_RE.search(page)
+        mt = TZ_RE.search(page)
         tz = ZoneInfo(mt.group(1)) if mt else None
         return Scheduler(
-            id=sid, name=name, cost_type_id=_first_int(_COST_TYPE_RE, page), timezone=mt.group(1) if mt else None,
-            min_interval=_first_int(_MIN_INTERVAL_RE, page) or 60,
-            book_min=_js_date(_SCHED_MIN_RE.search(page), tz), book_max=_js_date(_SCHED_MAX_RE.search(page), tz),
-            open_time=_js_time(_SCHED_START_RE.search(page)), close_time=_js_time(_SCHED_END_RE.search(page)),
+            id=sid, name=name, cost_type_id=first_int(COST_TYPE_RE, page), timezone=mt.group(1) if mt else None,
+            min_interval=first_int(MIN_INTERVAL_RE, page) or 60,
+            book_min=js_date(SCHED_MIN_RE.search(page), tz), book_max=js_date(SCHED_MAX_RE.search(page), tz),
+            open_time=js_time(SCHED_START_RE.search(page)), close_time=js_time(SCHED_END_RE.search(page)),
         )
 
     def events_context(self) -> EventsContext:
         referer = f"{APP_HOST}/Online/Events/List/{self.org_id}"
         try:
             page = self.s.get(referer, timeout=self.timeout).text
-            m = _APILIST_RE.search(page)
+            m = APILIST_RE.search(page)
             if not m:
-                if not _looks_logged_in(page, referer):
+                if not looks_logged_in(page, referer):
                     raise LoginError("session expired")
                 raise CourtReserveError("events list page has no ApiList url")
             partial = self.s.get(html.unescape(m.group(1)), params={"onlineListCookie": ""},
@@ -287,10 +186,10 @@ class CourtReserveClient:
                                  timeout=self.timeout).text
         except requests.RequestException as e:
             raise CourtReserveError(f"network error loading events: {e}") from e
-        m2 = _LOADEVENTS_RE.search(partial)
+        m2 = LOADEVENTS_RE.search(partial)
         if not m2:
             raise CourtReserveError("events partial has no ApiLoadEvents url")
-        cats = [EventCategory(int(i), html.unescape(json.loads(f'"{n}"')).strip()) for i, n in _CATEGORY_RE.findall(partial)]
+        cats = [EventCategory(int(i), html.unescape(json.loads(f'"{n}"')).strip()) for i, n in CATEGORY_RE.findall(partial)]
         return EventsContext(load_url=html.unescape(m2.group(0)), categories=cats, fetched_at=datetime.now(timezone.utc))
 
     def list_events(self, ctx: EventsContext, day: date, category_ids: list[int], cost_type_id: int | None) -> list[Event]:
@@ -314,7 +213,243 @@ class CourtReserveClient:
             raise CourtReserveError(f"unexpected events response (HTTP {r.status_code})")
         if not j.get("isValid"):
             raise CourtReserveError("events query rejected")
-        return [ev for ev in (_parse_card(c) for c in (j.get("data") or "").split(_CARD_SPLIT)[1:]) if ev]
+        return [ev for ev in (parse_card(c) for c in (j.get("data") or "").split(CARD_SPLIT)[1:]) if ev]
+
+    def _xhr(self, referer: str) -> dict[str, str]:
+        return {"X-Requested-With": "XMLHttpRequest", "Origin": APP_HOST, "Referer": referer}
+
+    @staticmethod
+    def _mdy(day: date) -> str:
+        return f"{day.month}/{day.day}/{day.year}"
+
+    @staticmethod
+    def _ampm(hhmm: str) -> str:
+        h, m = (int(x) for x in hhmm.split(":"))
+        return f"{(h % 12) or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
+
+    def court_form(self, scheduler_id: int, day: date, start: str, end: str, court_type_id: int, court_type: str) -> FormSpec:
+        referer = self.bookings_url(scheduler_id)
+        params = {"start": f"{self._mdy(day)} {self._ampm(start)}", "end": f"{self._mdy(day)} {self._ampm(end)}",
+                  "customSchedulerId": str(scheduler_id), "courtTypeId": str(court_type_id), "courtType": court_type}
+        try:
+            shell = self.s.get(f"{APP_HOST}/Online/Reservations/CreateReservation/{self.org_id}", params=params,
+                               headers=self._xhr(referer), timeout=self.timeout).text
+            m = FIXURL_RE.search(shell)
+            if not m:
+                raise CourtReserveError("reservation modal shell has no form url")
+            r = self.s.get(html.unescape(m.group(1)), headers=self._xhr(referer), timeout=self.timeout)
+        except requests.RequestException as e:
+            raise CourtReserveError(f"network error loading reservation form: {e}") from e
+        if "json" in r.headers.get("content-type", ""):
+            j = r.json()
+            raise CourtReserveError(j.get("errorMessage") or "reservation form refused")
+        spec = parse_form(r.text, form_id="createReservation-Form")
+        if not spec:
+            raise CourtReserveError("reservation form not found in modal")
+        spec.flags["captcha"] = spec.get("IsCaptchaEnabledForPlayer")
+        spec.flags["payment_required"] = spec.get("RequirePaymentWhenBookingCourtsOnline")
+        return spec
+
+    def reservation_types(self, scheduler_id: int, day: date, start: str, end: str, court_type_id: int) -> list[ReservationType]:
+        try:
+            r = self.s.post(f"{APP_HOST}/Online/AjaxReservation/GetAvailableReservationTypes/{self.org_id}",
+                            data={"customSchedulerId": str(scheduler_id), "userId": "", "startTime": f"{start}:00",
+                                  "date": f"{self._mdy(day)} 12:00:00 AM", "courtId": "", "courtType": str(court_type_id),
+                                  "endTime": self._ampm(end), "isDynamicSlot": "False", "instructorId": ""},
+                            headers=self._xhr(self.bookings_url(scheduler_id)), timeout=self.timeout)
+            rows = r.json()
+        except (requests.RequestException, ValueError) as e:
+            raise CourtReserveError(f"could not load reservation types: {e}") from e
+        return [ReservationType(id=int(x["Id"]), name=str(x.get("Name", "")).strip(), max_time=int(x.get("MaxTime") or 0),
+                                min_time=int(x.get("MinTime") or 0), min_players=int(x.get("MinimumNumberOfPlayers") or 0),
+                                max_players=int(x.get("MaximumNumberOfPlayers") or 0)) for x in rows if x.get("IsActive", True)]
+
+    def duration_options(self, scheduler_id: int, type_id: int, day: date, start: str, court_type_id: int) -> list[int]:
+        try:
+            r = self.s.get(f"{API4_HOST}/api/v1/portalreservationsapi/GetDurationDropdown",
+                           params={"id": self.org_id, "reservationTypeId": type_id, "startTime": f"{start}:00",
+                                   "selectedDate": self._mdy(day), "uiCulture": "en-US", "useMinTimeAsDefault": "False",
+                                   "courtId": "", "courtType": str(court_type_id), "endTime": "", "isDynamicSlot": "False",
+                                   "instructorId": "", "customSchedulerId": str(scheduler_id), "selectedDuration": ""},
+                           headers=self._xhr(self.bookings_url(scheduler_id)), timeout=self.timeout)
+            rows = r.json()
+        except (requests.RequestException, ValueError) as e:
+            raise CourtReserveError(f"could not load durations: {e}") from e
+        return [int(x["Value"]) for x in rows if not x.get("Disabled") and str(x.get("Value", "")).isdigit()]
+
+    def search_members(self, query: str, cost_type_id: int | None, org_member_id: int | None, scheduler_id: int | None) -> list[Member]:
+        try:
+            r = self.s.get(f"{API4_HOST}/api/v1/portalreservationsapi/Api_Reservation_GetMembersToPlayWith",
+                           params={"id": self.org_id, "costTypeId": cost_type_id or "", "filterValue": query,
+                                   "organizationMemberIdsString": str(org_member_id or ""), "userId": "",
+                                   "customSchedulerId": scheduler_id or "", "isOpenReservation": "false"},
+                           headers=self._xhr(self.bookings_url(scheduler_id or 0)), timeout=self.timeout)
+            rows = r.json()
+        except (requests.RequestException, ValueError) as e:
+            raise CourtReserveError(f"member search failed: {e}") from e
+        if isinstance(rows, dict):
+            rows = rows.get("Data") or rows.get("data") or []
+        out = []
+        for x in rows:
+            oid = x.get("OrgMemberId") or x.get("OrganizationMemberId") or x.get("Id")
+            if oid is None:
+                continue
+            out.append(Member(org_member_id=int(oid), member_id=int(x["MemberId"]) if x.get("MemberId") else None,
+                              name=str(x.get("DisplayName") or x.get("FullName") or x.get("Name") or "").strip()))
+        return out
+
+    def court_waitlist_form(self, scheduler_id: int, day: date, start: str, end: str) -> FormSpec:
+        referer = self.bookings_url(scheduler_id)
+        try:
+            r = self.s.get(f"{APP_HOST}/Online/ReservationQueuePortal/JoinQueue/{self.org_id}",
+                           params={"csId": str(scheduler_id), "start": f"{self._mdy(day)} {self._ampm(start)}",
+                                   "end": f"{self._mdy(day)} {self._ampm(end)}"},
+                           headers=self._xhr(referer), timeout=self.timeout)
+        except requests.RequestException as e:
+            raise CourtReserveError(f"network error loading waitlist form: {e}") from e
+        spec = parse_form(r.text, action_contains="JoinQueue")
+        if not spec:
+            raise CourtReserveError("waitlist form not found")
+        if spec.action.startswith("/"):
+            spec.action = APP_HOST + spec.action
+        spec.flags["duration_types"] = ",".join(re.findall(r'name="DurationType"[^>]*value="([^"]*)"', r.text))
+        return spec
+
+    def event_signup_form(self, event_id: int, reservation_id: int, number: str) -> FormSpec:
+        page_url = (f"{APP_HOST}/Online/Events/SignUpToEvent/{self.org_id}?eventId={event_id}"
+                    f"&reservationId={reservation_id}&reservationNumber={number}")
+        try:
+            page = self.s.get(page_url, timeout=self.timeout).text
+            m = SIGNUP_GET_RE.search(page)
+            if not m:
+                if not looks_logged_in(page, page_url):
+                    raise LoginError("session expired")
+                raise CourtReserveError("sign-up page has no form loader (registration may not be open)")
+            r = self.s.get(html.unescape(m.group(1)), headers=self._xhr(page_url), timeout=self.timeout)
+        except requests.RequestException as e:
+            raise CourtReserveError(f"network error loading sign-up form: {e}") from e
+        body = r.text
+        if "json" in r.headers.get("content-type", ""):
+            j = r.json()
+            if isinstance(j, dict) and j.get("returnUrl"):
+                raise CourtReserveError(j.get("errorMessage") or "sign-up refused")
+            body = j.get("data") or j.get("html") or body if isinstance(j, dict) else body
+        spec = parse_form(body, form_id="Eventsignup-form")
+        if not spec:
+            raise CourtReserveError(refusal(body) or "sign-up form not found")
+        spec.flags["payment_required"] = spec.get("RequireOnlinePayment")
+        spec.flags["available"] = spec.get("SelectedReservation.AvailablePlaces")
+        return spec
+
+    def bookings_token(self) -> BookingsToken:
+        url = f"{APP_HOST}/Online/Bookings/List/{self.org_id}"
+        try:
+            page = self.s.get(url, timeout=self.timeout).text
+        except requests.RequestException as e:
+            raise CourtReserveError(f"network error loading bookings page: {e}") from e
+        mj, mr = JWT_RE.search(page), REQDATA_ATTR_RE.search(page)
+        if not mj or not mr:
+            if not looks_logged_in(page, url):
+                raise LoginError("session expired")
+            raise CourtReserveError("bookings page has no api token")
+        try:
+            claims = json.loads(base64.urlsafe_b64decode(mj.group(1).split(".")[1] + "==").decode())
+            exp = datetime.fromtimestamp(int(claims["exp"]), tz=timezone.utc)
+        except Exception:
+            exp = datetime.now(timezone.utc) + timedelta(minutes=30)
+        return BookingsToken(jwt=mj.group(1), request_data=mr.group(1), expires_at=exp)
+
+    def my_bookings(self, token: BookingsToken, start: date, end: date, tz: str | None, cancelled: bool = False) -> list[Booking]:
+        headers = {
+            "Accept": "application/json, text/plain, */*", "Content-Type": "application/json",
+            "X-Requested-By": "AxiosReactRequest", "ReactSubmit": "true", "Origin": APP_HOST,
+            "Referer": f"{APP_HOST}/Online/Bookings/List/{self.org_id}", "Authorization": f"Bearer {token.jwt}",
+            "RequestData": token.request_data, "X-UI-CULTURE": "en-US", "X-UI-TIMEZONE": tz or "UTC",
+        }
+        params = {
+            "OrganizationId": str(self.org_id), "OrgMemberIdsString": "", "BookingTypesString": ",".join(str(i) for i in range(1, 13)),
+            "DatesString": "5", "FilterSelectedDates": "5", "SkipRows": "0", "IsCancelledView": "true" if cancelled else "false",
+            "CustomDate_Start": self._mdy(start), "CustomDate_End": self._mdy(end),
+        }
+        try:
+            r = self.s.get(f"{BACKEND_HOST}/api/my-bookings-portal/get-list",
+                           params={"id": self.org_id, "requestData": token.request_data, "uiCulture": "en-US", **params},
+                           headers=headers, timeout=self.timeout)
+            if r.status_code == 401:
+                raise LoginError("bookings token rejected")
+            j = r.json()
+        except requests.RequestException as e:
+            raise CourtReserveError(f"network error loading bookings: {e}") from e
+        except ValueError:
+            raise CourtReserveError(f"unexpected bookings response (HTTP {r.status_code})")
+        zone = ZoneInfo(tz) if tz else None
+        out = []
+        for x in j.get("Data") or []:
+            try:
+                st = datetime.fromisoformat(x["ReservationStartDateTime"]).replace(tzinfo=zone)
+                en = datetime.fromisoformat(x["ReservationEndDateTime"]).replace(tzinfo=zone)
+            except (KeyError, TypeError, ValueError):
+                continue
+            out.append(Booking(
+                reservation_id=int(x.get("ReservationId") or 0), event_id=int(x["EventId"]) if x.get("EventId") else None,
+                name=(x.get("EventName") or "").strip(), type_name=(x.get("TypeName") or "").strip(), start=st, end=en,
+                courts=re.sub(r"\s+", " ", x.get("CourtsDisplay") or "").strip(), registered=bool(x.get("IsRegistered")),
+                waitlisted=bool(x.get("IsWaitlisted") or x.get("IsWaitlistRow")), upcoming=bool(x.get("IsUpcoming")),
+                cancelled=bool(x.get("IsCanceled")), button=(x.get("ButtonText") or "").strip(),
+                members=[m.get("FullName", "") for m in x.get("ReservationMembersList") or []],
+            ))
+        out.sort(key=lambda b: b.start)
+        return out
+
+    def resolve_event(self, details_path: str) -> dict:
+        page_url = details_path if details_path.startswith("http") else APP_HOST + details_path
+        try:
+            page = self.s.get(page_url, timeout=self.timeout).text
+            m = re.search(r"fixUrl\('(https://events\.courtreserve\.com/Online/EventsApi/ApiDetails[^']+)'", page)
+            body = page
+            if m:
+                r = self.s.get(html.unescape(m.group(1)), headers=self._xhr(page_url), timeout=self.timeout)
+                try:
+                    j = r.json()
+                    body = (j.get("data") or j.get("html") or r.text) if isinstance(j, dict) else r.text
+                except ValueError:
+                    body = r.text
+        except requests.RequestException as e:
+            raise CourtReserveError(f"network error loading event: {e}") from e
+        ev = re.search(r"eventId=(\d+)", body) or re.search(r"eventId=(\d+)", page)
+        rid = re.search(r"(?:resId|reservationId)=(\d+)", details_path) or re.search(r"reservationId=(\d+)", body)
+        num = re.search(r"/Details/\d+/([A-Z0-9]+)", details_path) or re.search(r"reservationNumber=([A-Z0-9]+)", body)
+        opens = re.search(r"Registration opens in ([^<]{0,60}?)\s*<", body)
+        return {"event_id": int(ev.group(1)) if ev else None, "reservation_id": int(rid.group(1)) if rid else None,
+                "number": num.group(1) if num else None, "opens_in": opens.group(1).strip() if opens else None,
+                "register_open": "SignUpToEvent/" in body, "waitlist_open": "SignUpToWaitingList/" in body}
+
+    def event_waitlist_form(self, event_id: int, reservation_id: int) -> FormSpec:
+        page_url = f"{APP_HOST}/Online/Events/SignUpToWaitingList/{self.org_id}?eventId={event_id}&reservationId={reservation_id}"
+        try:
+            page = self.s.get(page_url, timeout=self.timeout).text
+        except requests.RequestException as e:
+            raise CourtReserveError(f"network error loading event waitlist form: {e}") from e
+        spec = parse_form(page, action_contains="SignUpToWaitingList")
+        if not spec:
+            if "/Account/LogIn" in page_url or "Account/LogIn" in page[:3000]:
+                raise LoginError("session expired")
+            raise CourtReserveError(refusal(page) or "event waitlist form not found")
+        if spec.action.startswith("/"):
+            spec.action = APP_HOST + spec.action
+        spec.flags["auto_register"] = spec.get("AutoRegisterFromWaitList")
+        return spec
+
+    def submit_form(self, spec: FormSpec, overrides: dict[str, str], referer: str, dry_run: bool) -> dict:
+        fields = spec.with_overrides(overrides)
+        if dry_run or not ALLOW_SUBMIT:
+            return {"dry_run": True, "action": spec.action, "fields": redacted(fields)}
+        try:
+            r = self.s.post(spec.action, data=fields, headers=self._xhr(referer), timeout=self.timeout)
+            data = r.json() if "json" in r.headers.get("content-type", "") else None
+        except requests.RequestException as e:
+            raise CourtReserveError(f"network error submitting: {e}") from e
+        return {"dry_run": False, "status": r.status_code, "json": data, "text": None if data else r.text[:500]}
 
     def booking_horizon(self, scheduler_id: int) -> tuple[datetime | None, datetime | None]:
         sched = self._scheduler_page(scheduler_id)
@@ -357,8 +492,8 @@ class CourtReserveClient:
         rows = data.get("Data") or []
         out = []
         for row in rows:
-            start = _ms_to_local(row.get("Start"), tz)
-            end = _ms_to_local(row.get("End"), tz)
+            start = ms_to_local(row.get("Start"), tz)
+            end = ms_to_local(row.get("End"), tz)
             if start is None or end is None:
                 continue
             out.append(Slot(
@@ -375,71 +510,3 @@ class CourtReserveClient:
             ))
         out.sort(key=lambda x: x.start)
         return out
-
-
-def _first_int(rx: re.Pattern[str], text: str) -> int | None:
-    m = rx.search(text)
-    return int(m.group(1)) if m else None
-
-
-def _looks_logged_in(page: str, final_url: str) -> bool:
-    if "/Account/LogIn" in final_url or "/Account/Login" in final_url:
-        return False
-    return "Account/LogOut" in page or '"IsAuthenticated": "True"' in page
-
-
-def _text(card: str, testid: str) -> str:
-    m = re.search(r'data-testid="' + testid + r'[^"]*"[^>]*>(.*?)</(?:h\d|span|a|div)>', card, re.S)
-    return html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()) if m else ""
-
-
-def _hhmm(h: str, m: str | None, ap: str) -> str:
-    hour = int(h) % 12 + (12 if ap.lower() == "p" else 0)
-    return f"{hour:02d}:{int(m or 0):02d}"
-
-
-def _parse_card(card: str) -> Event | None:
-    name = _text(card, "event-name")
-    if not name:
-        return None
-    when = _text(card, "date-time-section")
-    times = _TIME_RE.findall(when.split(",")[-1]) if when else []
-    start = _hhmm(*times[0]) if times else None
-    end = _hhmm(*times[1]) if len(times) > 1 else None
-    spots = _text(card, "slots-info")
-    sm = _SPOTS_RE.search(spots)
-    reg = re.search(r'href="([^"]+)"[^>]*data-testid="register-btn"[^>]*>(.*?)</a>', card, re.S)
-    url_m = re.search(r'data-url="([^"]+)"', card)
-    path = html.unescape(reg.group(1) if reg else (url_m.group(1) if url_m else ""))
-    rid = re.search(r"resId=(\d+)", path)
-    return Event(
-        category=_text(card, "category-name"), name=name, when=when, start=start, end=end,
-        cost=_text(card, "cost"), spots=spots,
-        spots_left=int(sm.group(1)) if sm else (0 if spots.lower() == "full" else None),
-        spots_total=int(sm.group(2)) if sm else None,
-        tags=[html.unescape(t.strip()) for t in re.findall(r'data-testid="tag-name[^"]*"\s*>\s*([^<]+?)\s*<', card)],
-        action=re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", reg.group(2))).strip() if reg else "",
-        details_path=path, reservation_id=int(rid.group(1)) if rid else None,
-    )
-
-
-def _js_time(m: re.Match[str] | None) -> str | None:
-    if not m:
-        return None
-    return f"{int(m.group(4)):02d}:{int(m.group(5)):02d}"
-
-
-def _js_date(m: re.Match[str] | None, tz: ZoneInfo | None) -> datetime | None:
-    if not m:
-        return None
-    y, mo, d, h, mi, sec = (int(m.group(i)) for i in range(1, 7))
-    return datetime(y, mo + 1, d, h, mi, sec, tzinfo=tz)
-
-
-def _ms_to_local(value, tz: ZoneInfo) -> datetime | None:
-    if not value:
-        return None
-    m = _MS_DATE_RE.search(str(value))
-    if not m:
-        return None
-    return datetime.fromtimestamp(int(m.group(1)) / 1000, tz=timezone.utc).astimezone(tz)

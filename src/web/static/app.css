@@ -52,6 +52,11 @@ pre { margin: 0; font: inherit; }
 .status .kv b.live { color: var(--kitchen-ink); }
 .status .kv b.down { color: var(--fault-ink); }
 .status .right { margin-left: auto; display: flex; gap: 18px; flex-wrap: wrap; }
+body.offline .main, body.offline .tabs { opacity: 0.45; }
+body.offline .status { border-bottom-color: var(--fault-ink); }
+body.offline .ball, body.offline .ball .hole { color: var(--fault-ink); }
+body.offline .count .big, body.offline .count .big.live { color: var(--fault-ink); }
+body.offline .status .name, body.offline #now { color: var(--fault-ink); }
 
 .tabs { display: flex; gap: 2px; flex-wrap: wrap; min-height: 1.8em; }
 .tabs a { color: var(--muted); padding: 2px 10px 2px 8px; border: 1px solid transparent; }
@@ -150,8 +155,40 @@ pre { margin: 0; font: inherit; }
 .bar .act, .bar .act-slot { display: inline-block; width: 14ch; margin-right: 4px; text-align: left; }
 .bar.soon .on { color: var(--ball-dim); } .bar.soon .off { color: var(--dim); }
 
+.arm-fields { display: grid; gap: 8px; margin-top: 8px; max-width: 80ch; }
+.arm-fields label { color: var(--muted); display: grid; grid-template-columns: 11ch 1fr; gap: 8px; align-items: center; }
+.arm-fields label::before { content: attr(data-k) ":"; color: var(--dim); }
+.arm-fields select, .arm-fields input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); padding: 2px 6px; }
+.arm-fields .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { color: var(--kitchen-ink); cursor: pointer; }
+.chip::before { content: "["; color: var(--dim); } .chip::after { content: " x]"; color: var(--dim); }
+.pick { display: grid; gap: 2px; margin-top: 4px; }
+.pick button { font: inherit; text-align: left; background: transparent; border: 0; color: var(--court-ink); cursor: pointer; padding: 0; }
+.pick button:hover { text-decoration: underline; }
+
+.tg { display: grid; grid-template-columns: 10ch 1fr auto auto; gap: 10px; align-items: baseline; }
+.tg .st { font-weight: 500; }
+.st.armed, .st.preflight, .st.firing { color: var(--ball); } .st.watching { color: var(--court-ink); }
+.st.done_dry, .st.done { color: var(--kitchen-ink); } .st.failed, .st.blocked { color: var(--fault-ink); }
+.st.disarmed, .st.expired { color: var(--dim); }
+.tg .what { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.tg .what span { color: var(--muted); }
+.tg .when { color: var(--dim); white-space: nowrap; }
+.tg .ops { white-space: nowrap; }
+.tg .ops .act { margin-left: 4px; }
+.tg-result { color: var(--muted); padding-left: 11ch; overflow-wrap: anywhere; }
+.bk { display: grid; grid-template-columns: 10ch 1fr auto; gap: 10px; align-items: baseline; }
+.bk .st { font-weight: 500; }
+.st.booked { color: var(--kitchen-ink); } .st.waitlisted { color: var(--ball); }
+.bk .what { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.bk .what span { color: var(--muted); }
+.bk .when { color: var(--dim); white-space: nowrap; }
+.evc .mine, .bar .mine { color: var(--kitchen-ink); display: inline-block; width: 14ch; }
+.rows .empty { color: var(--dim); }
+
 .count { text-align: right; }
 .count .lbl { color: var(--dim); }
+.count .big.live { color: var(--ball); }
 .count .big { color: var(--ball-dim); font-weight: 600; line-height: 1.05; white-space: pre; display: inline-block; text-align: left; }
 .count .sub { color: var(--muted); }
 

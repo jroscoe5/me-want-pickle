@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from collections.abc import Generator
@@ -40,6 +41,36 @@ CREATE TABLE IF NOT EXISTS schedulers (
     close_time    TEXT,
     UNIQUE (facility_id, scheduler_id)
 );
+
+CREATE TABLE IF NOT EXISTS targets (
+    id           INTEGER PRIMARY KEY,
+    facility_id  INTEGER NOT NULL REFERENCES facilities(id) ON DELETE CASCADE,
+    kind         TEXT    NOT NULL,
+    status       TEXT    NOT NULL DEFAULT 'armed',
+    label        TEXT    NOT NULL,
+    fire_at      TEXT,
+    params       TEXT    NOT NULL DEFAULT '{}',
+    dry_run      INTEGER NOT NULL DEFAULT 1,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    result       TEXT,
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS targets_facility_idx ON targets(facility_id, status);
+
+CREATE TABLE IF NOT EXISTS attempts (
+    id           INTEGER PRIMARY KEY,
+    target_id    INTEGER NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+    facility_id  INTEGER NOT NULL,
+    ts           TEXT    NOT NULL,
+    step         TEXT    NOT NULL,
+    request      TEXT,
+    outcome      TEXT    NOT NULL,
+    note         TEXT,
+    payload      TEXT,
+    is_write     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS attempts_target_idx ON attempts(target_id, id);
 
 CREATE TABLE IF NOT EXISTS log (
     id           INTEGER PRIMARY KEY,
@@ -198,6 +229,92 @@ def bump_court_count(scheduler_row_id: int, count: int) -> None:
         conn.execute(
             "UPDATE schedulers SET court_count = MAX(court_count, ?) WHERE id = ?", (count, scheduler_row_id)
         )
+
+
+def _target_row(r) -> dict[str, Any]:
+    d = dict(r)
+    d["params"] = json.loads(d.get("params") or "{}")
+    d["dry_run"] = bool(d.get("dry_run"))
+    return d
+
+
+def insert_target(facility_id: int, kind: str, label: str, fire_at: str | None, params: dict[str, Any],
+                  status: str = "armed", dry_run: bool = True) -> dict[str, Any]:
+    ts = now_iso()
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO targets (facility_id, kind, status, label, fire_at, params, dry_run, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (facility_id, kind, status, label, fire_at, json.dumps(params), int(dry_run), ts, ts),
+        )
+        row = conn.execute("SELECT * FROM targets WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return _target_row(row)
+
+
+def get_target(target_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM targets WHERE id = ?", (target_id,)).fetchone()
+    return _target_row(row) if row else None
+
+
+def list_targets(facility_id: int | None = None, statuses: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+    sql, args = "SELECT * FROM targets", []
+    where = []
+    if facility_id is not None:
+        where.append("facility_id = ?"); args.append(facility_id)
+    if statuses:
+        where.append(f"status IN ({','.join('?' * len(statuses))})"); args.extend(statuses)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY COALESCE(fire_at, created_at), id"
+    with connect() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    return [_target_row(r) for r in rows]
+
+
+def update_target(target_id: int, **fields: Any) -> dict[str, Any] | None:
+    allowed = {"status", "fire_at", "params", "result", "attempts", "label", "dry_run", "kind"}
+    sets, vals = ["updated_at = ?"], [now_iso()]
+    for k, v in fields.items():
+        if k in allowed:
+            sets.append(f"{k} = ?")
+            vals.append(json.dumps(v) if k == "params" else (int(v) if k == "dry_run" else v))
+    vals.append(target_id)
+    with connect() as conn:
+        conn.execute(f"UPDATE targets SET {', '.join(sets)} WHERE id = ?", vals)
+    return get_target(target_id)
+
+
+def delete_target(target_id: int) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM targets WHERE id = ?", (target_id,))
+
+
+def add_attempt(target_id: int, facility_id: int, step: str, outcome: str, request: str | None = None,
+                note: str | None = None, payload: Any = None, is_write: bool = False) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO attempts (target_id, facility_id, ts, step, request, outcome, note, payload, is_write)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (target_id, facility_id, datetime.now(timezone.utc).isoformat(timespec="milliseconds"), step, request,
+             outcome, note, json.dumps(payload) if payload is not None else None, int(is_write)),
+        )
+        return int(cur.lastrowid)
+
+
+def list_attempts(target_id: int) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM attempts WHERE target_id = ? ORDER BY id", (target_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def writes_today(facility_id: int) -> int:
+    day = datetime.now(timezone.utc).date().isoformat()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM attempts WHERE facility_id = ? AND is_write = 1 AND ts >= ?", (facility_id, day)
+        ).fetchone()
+    return int(row["n"])
 
 
 def add_log(level: str, source: str, message: str, facility_id: int | None = None) -> int:

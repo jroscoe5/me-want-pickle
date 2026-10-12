@@ -16,7 +16,8 @@
       <span class="kv" id="st-facility"></span>
       <span class="kv" id="st-session"></span>
       <span class="right">
-        <span class="kv">sniper <b>idle</b></span>
+        <span class="kv" id="st-server" hidden></span>
+        <span class="kv">watcher <b id="st-watcher">idle</b></span>
         <span class="kv"><b id="now">--:--:--</b></span>
       </span>
     </div>
@@ -82,11 +83,33 @@
           </div>
         </div>
         <div class="count">
-          <div class="lbl">until release · nothing armed</div>
+          <div class="lbl" id="count-lbl">until release · nothing armed</div>
           <pre class="big" id="digits"></pre>
-          <div class="sub">no targets yet</div>
+          <div class="sub" id="count-sub">no targets yet</div>
         </div>
       </div>
+    </fieldset>
+
+    <fieldset class="box" id="arm-box" hidden>
+      <legend><b>arm target</b> <span class="hint" id="arm-hint"></span></legend>
+      <div class="target" id="arm-rows"></div>
+      <div class="arm-fields" id="arm-fields"></div>
+      <div class="actions">
+        <button class="btn primary" type="button" id="arm-go">arm · dry run</button>
+        <button class="btn" type="button" id="arm-cancel">cancel</button>
+        <span class="form-msg" id="arm-msg" role="status"></span>
+      </div>
+    </fieldset>
+
+    <fieldset class="box">
+      <legend><b>targets</b> <span class="hint" id="targets-hint">· dry run only</span></legend>
+      <div class="rows" id="targets"></div>
+    </fieldset>
+
+    <fieldset class="box">
+      <legend><b>my bookings</b> <span class="hint" id="bookings-hint"></span></legend>
+      <div class="rows" id="bookings"></div>
+      <div class="actions"><button class="btn" type="button" id="b-sync">r refresh bookings</button><span class="form-msg" id="bookings-msg" role="status"></span></div>
     </fieldset>
 
     <fieldset class="box">
@@ -110,6 +133,8 @@
   </template>
 
   <script src="{{ url_for('static', filename='ball.js') }}"></script>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  {% for m in ['core', 'session', 'days', 'courts', 'events', 'bookings', 'targets', 'clock', 'app'] %}
+  <script src="{{ url_for('static', filename='js/' ~ m ~ '.js') }}"></script>
+  {% endfor %}
 </body>
 </html>

@@ -27,7 +27,7 @@ def cmd_facilities(_: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="mwp", description="CourtReserve court and event sniper")
+    p = argparse.ArgumentParser(prog="mwp", description="CourtReserve court and event watcher")
     p.add_argument("--version", action="version", version=f"mwp {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 

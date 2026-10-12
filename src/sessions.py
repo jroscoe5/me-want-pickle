@@ -10,7 +10,7 @@ from http.cookiejar import LWPCookieJar
 from pathlib import Path
 
 from . import config, db, secrets
-from .courtreserve import CourtReserveClient, CourtReserveError, EventsContext, LoginError
+from .courtreserve import BookingsToken, CourtReserveClient, CourtReserveError, EventsContext, LoginError
 
 VERIFY_TTL = timedelta(minutes=10)
 
@@ -58,6 +58,9 @@ class Session:
     checked_at: datetime | None = None
     error: str | None = None
     events: EventsContext | None = None
+    bookings_token: BookingsToken | None = None
+    bookings: list = field(default_factory=list)
+    bookings_at: datetime | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
